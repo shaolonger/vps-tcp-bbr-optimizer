@@ -63,7 +63,7 @@ unset VPS_TCP_BBR_OPTIMIZER_BASH_STAGE
 
 set -euo pipefail
 
-SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="${VPS_TCP_BBR_OPTIMIZER_SCRIPT_NAME_OVERRIDE:-$(basename "$0")}"
 SCRIPT_VERSION="0.1.0"
 
 DEFAULT_CONF_PATH="/etc/sysctl.d/99-vps-tcp-bbr-optimizer.conf"

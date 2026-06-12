@@ -32,6 +32,30 @@
 
 ## 快速开始
 
+在线一键运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/install.sh | sudo sh
+```
+
+在线一键直接应用：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/install.sh | sudo sh -s -- --apply --yes
+```
+
+在线一键回滚：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/install.sh | sudo sh -s -- --rollback
+```
+
+如果你更习惯 `wget`：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/install.sh | sudo sh -s -- --apply --yes
+```
+
 先给脚本执行权限：
 
 ```bash
@@ -81,6 +105,13 @@ sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimize
 - `--no-network-test`: 不做 ping 探测，直接使用地区默认 RTT
 - `--print-config`: 顺手打印将写入的 sysctl 配置
 - `--json`: 输出 JSON，方便接入别的自动化流程
+
+## 在线入口说明
+
+- GitHub Raw 在线入口脚本是 [install.sh](https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/install.sh)
+- 它会先下载仓库里的主脚本 `vps-tcp-bbr-optimizer.sh` 到临时文件，再执行
+- 因此适合 `curl | sh`、`wget | sh` 这类一次性运行方式
+- 需要传参时，使用 `sh -s -- ...` 的形式
 
 ## 当前会调整的重点项
 
