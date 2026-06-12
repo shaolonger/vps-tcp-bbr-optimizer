@@ -73,7 +73,7 @@ case "$RAW_NAME" in
     ;;
 esac
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.2.0"
 STATE_DIR="${VPS_TCP_BBR_OPTIMIZER_VERIFY_STATE_DIR:-/var/lib/vps-tcp-bbr-optimizer/verify}"
 BASELINE_FILE="${STATE_DIR}/baseline.snapshot"
 CURRENT_FILE="${STATE_DIR}/current.snapshot"
@@ -96,14 +96,27 @@ SYSCTL_KEYS=(
   "net.ipv4.tcp_mtu_probing"
   "net.ipv4.tcp_slow_start_after_idle"
   "net.ipv4.tcp_fastopen"
+  "net.ipv4.tcp_ecn"
+  "net.ipv4.tcp_no_metrics_save"
+  "net.ipv4.tcp_fin_timeout"
+  "net.ipv4.tcp_tw_reuse"
+  "net.ipv4.ip_local_port_range"
   "net.ipv4.tcp_sack"
   "net.ipv4.tcp_window_scaling"
   "net.core.rmem_max"
   "net.core.wmem_max"
+  "net.core.rmem_default"
+  "net.core.wmem_default"
   "net.core.somaxconn"
   "net.core.netdev_max_backlog"
+  "net.core.netdev_budget"
+  "net.core.netdev_budget_usecs"
   "net.ipv4.tcp_max_syn_backlog"
+  "net.ipv4.tcp_rmem"
+  "net.ipv4.tcp_wmem"
   "net.ipv4.tcp_notsent_lowat"
+  "net.netfilter.nf_conntrack_max"
+  "fs.file-max"
 )
 
 usage() {
@@ -369,14 +382,27 @@ pretty_name() {
     net.ipv4.tcp_mtu_probing) printf '%s' "MTU 探测" ;;
     net.ipv4.tcp_slow_start_after_idle) printf '%s' "空闲后慢启动" ;;
     net.ipv4.tcp_fastopen) printf '%s' "TCP Fast Open" ;;
+    net.ipv4.tcp_ecn) printf '%s' "ECN" ;;
+    net.ipv4.tcp_no_metrics_save) printf '%s' "No Metrics Save" ;;
+    net.ipv4.tcp_fin_timeout) printf '%s' "FIN Timeout" ;;
+    net.ipv4.tcp_tw_reuse) printf '%s' "TW Reuse" ;;
+    net.ipv4.ip_local_port_range) printf '%s' "端口范围" ;;
     net.ipv4.tcp_sack) printf '%s' "SACK" ;;
     net.ipv4.tcp_window_scaling) printf '%s' "窗口缩放" ;;
     net.core.rmem_max) printf '%s' "rmem_max" ;;
     net.core.wmem_max) printf '%s' "wmem_max" ;;
+    net.core.rmem_default) printf '%s' "rmem_default" ;;
+    net.core.wmem_default) printf '%s' "wmem_default" ;;
     net.core.somaxconn) printf '%s' "somaxconn" ;;
     net.core.netdev_max_backlog) printf '%s' "netdev backlog" ;;
+    net.core.netdev_budget) printf '%s' "netdev budget" ;;
+    net.core.netdev_budget_usecs) printf '%s' "netdev budget usecs" ;;
     net.ipv4.tcp_max_syn_backlog) printf '%s' "syn backlog" ;;
+    net.ipv4.tcp_rmem) printf '%s' "tcp_rmem" ;;
+    net.ipv4.tcp_wmem) printf '%s' "tcp_wmem" ;;
     net.ipv4.tcp_notsent_lowat) printf '%s' "notsent_lowat" ;;
+    net.netfilter.nf_conntrack_max) printf '%s' "conntrack max" ;;
+    fs.file-max) printf '%s' "file-max" ;;
     ping_avg_ms) printf '%s' "Ping Avg (ms)" ;;
     root_qdisc) printf '%s' "Root qdisc" ;;
     *)

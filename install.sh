@@ -42,6 +42,7 @@ main() {
   chmod +x "$tmp_file"
 
   info "启动主脚本..."
+  info "默认会进入交互式向导，按回车即可采用推荐默认值。"
   export VPS_TCP_BBR_OPTIMIZER_SCRIPT_NAME_OVERRIDE="${VPS_TCP_BBR_OPTIMIZER_SCRIPT_NAME_OVERRIDE:-install.sh}"
   exec sh "$tmp_file" "$@"
 }
