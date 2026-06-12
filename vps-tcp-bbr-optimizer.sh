@@ -64,7 +64,7 @@ unset VPS_TCP_BBR_OPTIMIZER_BASH_STAGE
 set -euo pipefail
 
 SCRIPT_NAME="${VPS_TCP_BBR_OPTIMIZER_SCRIPT_NAME_OVERRIDE:-$(basename "$0")}"
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 
 DEFAULT_CONF_PATH="/etc/sysctl.d/99-vps-tcp-bbr-optimizer.conf"
 STATE_DIR="/var/lib/vps-tcp-bbr-optimizer"
@@ -82,11 +82,20 @@ USER_BANDWIDTH_MBPS=""
 USER_RTT_MS=""
 USER_CONCURRENCY=""
 REGION="global"
+PRESET="custom"
 PROFILE="balanced"
 TUNING_MODE="safe"
 WORKLOAD="generic"
 QDISC_CHOICE="auto"
 CONF_PATH="$DEFAULT_CONF_PATH"
+
+USER_SET_PRESET=0
+USER_SET_PROFILE=0
+USER_SET_TUNING_MODE=0
+USER_SET_WORKLOAD=0
+USER_SET_QDISC=0
+USER_SET_CONCURRENCY=0
+USER_SET_DEEP=0
 
 OS_NAME="unknown"
 OS_VERSION="unknown"
@@ -175,6 +184,7 @@ $SCRIPT_NAME v$SCRIPT_VERSION
   --deep                 启用更深入的链路诊断（tracepath/mtr），会稍慢一些。
   --no-network-test      跳过 RTT 探测，使用地区默认 RTT 估算。
   --region NAME          主要服务地区: china, asia, us, eu, global。默认 global。
+  --preset NAME          预设场景: custom, proxy-heavy。默认 custom。
   --profile NAME         优化侧重: balanced, throughput, latency。默认 balanced。
   --tuning-mode NAME     调优强度: safe, performance, extreme。默认 safe。
   --workload NAME        业务类型: generic, proxy, streaming, gaming, bulk。默认 generic。
@@ -487,6 +497,7 @@ parse_args() {
         ;;
       --deep)
         DEEP_DIAGNOSTICS=1
+        USER_SET_DEEP=1
         ;;
       --no-network-test)
         NO_NETWORK_TEST=1
@@ -495,21 +506,30 @@ parse_args() {
         shift
         REGION="${1:-}"
         ;;
+      --preset)
+        shift
+        PRESET="${1:-}"
+        USER_SET_PRESET=1
+        ;;
       --profile)
         shift
         PROFILE="${1:-}"
+        USER_SET_PROFILE=1
         ;;
       --tuning-mode)
         shift
         TUNING_MODE="${1:-}"
+        USER_SET_TUNING_MODE=1
         ;;
       --workload)
         shift
         WORKLOAD="${1:-}"
+        USER_SET_WORKLOAD=1
         ;;
       --qdisc)
         shift
         QDISC_CHOICE="${1:-}"
+        USER_SET_QDISC=1
         ;;
       --bandwidth)
         shift
@@ -522,6 +542,7 @@ parse_args() {
       --concurrency)
         shift
         USER_CONCURRENCY="${1:-}"
+        USER_SET_CONCURRENCY=1
         ;;
       --config-path)
         shift
@@ -546,6 +567,14 @@ parse_args() {
       ;;
     *)
       die "--region 仅支持: china, asia, us, eu, global"
+      ;;
+  esac
+
+  case "$PRESET" in
+    custom|proxy-heavy)
+      ;;
+    *)
+      die "--preset 仅支持: custom, proxy-heavy"
       ;;
   esac
 
@@ -949,6 +978,17 @@ region_description() {
   esac
 }
 
+preset_description() {
+  case "$1" in
+    proxy-heavy)
+      printf '%s' "高并发代理/中转/落地机，自动偏向 throughput + performance + proxy + fq"
+      ;;
+    *)
+      printf '%s' "手动组合所有参数"
+      ;;
+  esac
+}
+
 profile_description() {
   case "$1" in
     latency)
@@ -1067,6 +1107,39 @@ primary_target_for_region() {
   region_targets "$REGION" | awk 'NF {print; exit}'
 }
 
+apply_preset_defaults() {
+  case "$PRESET" in
+    proxy-heavy)
+      if [ "$USER_SET_PROFILE" -eq 0 ]; then
+        PROFILE="throughput"
+      fi
+      if [ "$USER_SET_TUNING_MODE" -eq 0 ]; then
+        TUNING_MODE="performance"
+      fi
+      if [ "$USER_SET_WORKLOAD" -eq 0 ]; then
+        WORKLOAD="proxy"
+      fi
+      if [ "$USER_SET_QDISC" -eq 0 ]; then
+        QDISC_CHOICE="fq"
+      fi
+      if [ "$USER_SET_DEEP" -eq 0 ]; then
+        DEEP_DIAGNOSTICS=1
+      fi
+      ;;
+  esac
+}
+
+preset_concurrency_floor() {
+  case "$PRESET" in
+    proxy-heavy)
+      clamp $(( CPU_CORES * 4096 )) 8192 32768
+      ;;
+    *)
+      printf '0'
+      ;;
+  esac
+}
+
 bandwidth_hint_value() {
   if [ -n "$USER_BANDWIDTH_MBPS" ]; then
     printf '%s' "$USER_BANDWIDTH_MBPS"
@@ -1080,6 +1153,7 @@ bandwidth_hint_value() {
 auto_concurrency_hint() {
   local bw=0
   local conn_hint=0
+  local preset_floor=0
 
   bw="$(bandwidth_hint_value)"
   conn_hint=$(( CPU_CORES * 1024 ))
@@ -1112,6 +1186,11 @@ auto_concurrency_hint() {
       ;;
   esac
 
+  preset_floor="$(preset_concurrency_floor)"
+  if [ "$preset_floor" -gt 0 ] && [ "$conn_hint" -lt "$preset_floor" ]; then
+    conn_hint="$preset_floor"
+  fi
+
   clamp "$conn_hint" 1024 32768
 }
 
@@ -1138,8 +1217,16 @@ run_interactive_wizard() {
     "$( [ "$BBR_AVAILABLE" -eq 1 ] && printf yes || printf no )"
   tty_printf '按回车可直接采用推荐默认值。\n'
 
+  PRESET="$(choose_from_list \
+    "1/10 选择场景预设" \
+    "$PRESET" \
+    "custom::$(preset_description custom)" \
+    "proxy-heavy::$(preset_description proxy-heavy)")"
+  USER_SET_PRESET=1
+  apply_preset_defaults
+
   REGION="$(choose_from_list \
-    "1/9 选择主要服务地区" \
+    "2/10 选择主要服务地区" \
     "$REGION" \
     "global::$(region_description global)" \
     "china::$(region_description china)" \
@@ -1148,42 +1235,47 @@ run_interactive_wizard() {
     "eu::$(region_description eu)")"
 
   PROFILE="$(choose_from_list \
-    "2/9 选择优化侧重" \
+    "3/10 选择优化侧重" \
     "$PROFILE" \
     "balanced::$(profile_description balanced)" \
     "throughput::$(profile_description throughput)" \
     "latency::$(profile_description latency)")"
+  USER_SET_PROFILE=1
 
   TUNING_MODE="$(choose_from_list \
-    "3/9 选择调优强度" \
+    "4/10 选择调优强度" \
     "$TUNING_MODE" \
     "safe::$(tuning_mode_description safe)" \
     "performance::$(tuning_mode_description performance)" \
     "extreme::$(tuning_mode_description extreme)")"
+  USER_SET_TUNING_MODE=1
 
   WORKLOAD="$(choose_from_list \
-    "4/9 选择业务负载类型" \
+    "5/10 选择业务负载类型" \
     "$WORKLOAD" \
     "generic::$(workload_description generic)" \
     "proxy::$(workload_description proxy)" \
     "streaming::$(workload_description streaming)" \
     "gaming::$(workload_description gaming)" \
     "bulk::$(workload_description bulk)")"
+  USER_SET_WORKLOAD=1
 
   QDISC_CHOICE="$(choose_from_list \
-    "5/9 选择 qdisc 队列算法" \
+    "6/10 选择 qdisc 队列算法" \
     "$QDISC_CHOICE" \
     "auto::$(qdisc_description auto)" \
     "fq::$(qdisc_description fq)" \
     "fq_codel::$(qdisc_description fq_codel)" \
     "fq_pie::$(qdisc_description fq_pie)" \
     "cake::$(qdisc_description cake)")"
+  USER_SET_QDISC=1
 
-  if confirm_default "6/9 是否启用深度链路诊断（tracepath/mtr，会稍慢）" 0; then
+  if confirm_default "7/10 是否启用深度链路诊断（tracepath/mtr，会稍慢）" "$DEEP_DIAGNOSTICS" ; then
     DEEP_DIAGNOSTICS=1
   else
     DEEP_DIAGNOSTICS=0
   fi
+  USER_SET_DEEP=1
 
   if [ -n "$USER_RTT_MS" ]; then
     rtt_mode="manual"
@@ -1192,7 +1284,7 @@ run_interactive_wizard() {
   fi
 
   rtt_mode="$(choose_from_list \
-    "7/9 选择 RTT 估算方式" \
+    "8/10 选择 RTT 估算方式" \
     "$rtt_mode" \
     "ping::实时 ping 探测，推荐" \
     "default::跳过探测，直接使用地区默认 RTT" \
@@ -1218,7 +1310,7 @@ run_interactive_wizard() {
   fi
 
   bandwidth_mode="$(choose_from_list \
-    "8/9 选择带宽来源" \
+    "9/10 选择带宽来源" \
     "$bandwidth_mode" \
     "auto::使用网卡速率/默认估算" \
     "manual::手动输入带宽上限")"
@@ -1236,7 +1328,7 @@ run_interactive_wizard() {
   fi
 
   concurrency_mode="$(choose_from_list \
-    "9/9 选择预计并发连接数" \
+    "10/10 选择预计并发连接数" \
     "$concurrency_mode" \
     "auto::按 CPU/带宽/业务类型自动估算（推荐 $concurrency_default）" \
     "manual::手动输入并发连接数")"
@@ -1496,6 +1588,36 @@ compute_recommendation() {
       ;;
   esac
 
+  if [ "$PRESET" = "proxy-heavy" ]; then
+    if [ "$buffer_workload_pct" -lt 120 ]; then
+      buffer_workload_pct=120
+    fi
+    if [ "$conn_workload_pct" -lt 220 ]; then
+      conn_workload_pct=220
+    fi
+    if [ "$notsent_pct" -lt 140 ]; then
+      notsent_pct=140
+    fi
+    if [ "$somaxconn_cap" -lt 32768 ]; then
+      somaxconn_cap=32768
+    fi
+    if [ "$backlog_cap" -lt 65535 ]; then
+      backlog_cap=65535
+    fi
+    if [ "$conntrack_cap" -lt 4194304 ]; then
+      conntrack_cap=4194304
+    fi
+    if [ "$filemax_cap" -lt 8388608 ]; then
+      filemax_cap=8388608
+    fi
+    [ -n "$RECOMMENDED_TCP_ECN" ] || RECOMMENDED_TCP_ECN="1"
+    [ -n "$RECOMMENDED_TCP_NO_METRICS_SAVE" ] || RECOMMENDED_TCP_NO_METRICS_SAVE="1"
+    [ -n "$RECOMMENDED_IP_LOCAL_PORT_RANGE" ] || RECOMMENDED_IP_LOCAL_PORT_RANGE="10240 65535"
+    [ -n "$RECOMMENDED_NETDEV_BUDGET" ] || RECOMMENDED_NETDEV_BUDGET="600"
+    [ -n "$RECOMMENDED_NETDEV_BUDGET_USECS" ] || RECOMMENDED_NETDEV_BUDGET_USECS="6000"
+    note "已启用 proxy-heavy 预设：会优先放大代理机场景下的连接、队列和端口预算。"
+  fi
+
   if [ "$ESTIMATED_RTT_MS" -ge 150 ]; then
     rtt_factor=135
   elif [ "$ESTIMATED_RTT_MS" -ge 80 ]; then
@@ -1718,6 +1840,7 @@ print_config_text() {
   cat <<EOF
 # Generated by $SCRIPT_NAME v$SCRIPT_VERSION
 # Time: $(date '+%Y-%m-%d %H:%M:%S %Z')
+# Preset: $PRESET
 # Profile: $PROFILE
 # Tuning mode: $TUNING_MODE
 # Workload: $WORKLOAD
@@ -1904,6 +2027,7 @@ $SCRIPT_NAME v$SCRIPT_VERSION
   Bandwidth     : ${EFFECTIVE_BANDWIDTH_MBPS} Mbps (${EFFECTIVE_BANDWIDTH_SOURCE})
 
 推荐:
+  Preset        : $PRESET
   Tuning mode   : $TUNING_MODE
   Workload      : $WORKLOAD
   Congestion    : $RECOMMENDED_CC
@@ -2018,6 +2142,7 @@ print_json() {
     "ping_results": $ping_json
   },
   "recommendation": {
+    "preset": "$(json_escape "$PRESET")",
     "profile": "$(json_escape "$PROFILE")",
     "tuning_mode": "$(json_escape "$TUNING_MODE")",
     "workload": "$(json_escape "$WORKLOAD")",
@@ -2070,6 +2195,7 @@ main() {
   ensure_runtime_dependencies
   load_hardware_info
   load_network_info
+  apply_preset_defaults
   run_interactive_wizard
   compute_recommendation
   build_config

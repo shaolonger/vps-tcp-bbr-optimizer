@@ -23,6 +23,7 @@
 - 入口脚本改为 `/bin/sh` 启动，自带 Bash bootstrap；像 Alpine 这类默认没有 Bash 的系统，脚本会在 root 环境下自动尝试安装 Bash 后继续执行。
 - 自动检测发行版、内核、虚拟化、CPU、内存、Swap、默认网卡、MTU、当前 qdisc、当前拥塞控制算法。
 - 直接 `curl | sh` 默认进入交互式向导；所有主要启动参数都会逐步询问，并给出推荐默认值，按回车即可继续。
+- 新增 `custom | proxy-heavy` 场景预设，`proxy-heavy` 会自动偏向高并发代理/中转机场景。
 - 会对关键依赖做跨发行版检查；缺少 `ip` / `sysctl` 这类硬依赖时，会按发行版自动尝试安装。
 - 可选做轻量 RTT 探测，并结合带宽与内存估算更合适的缓冲区。
 - 新增 `safe | performance | extreme` 调优强度，以及 `generic | proxy | streaming | gaming | bulk` 业务负载类型。
@@ -45,6 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/ma
 脚本会先检测当前机器，再一步步询问：
 
 - 主要服务地区
+- 场景预设
 - 优化侧重
 - 调优强度
 - 业务负载类型
@@ -109,6 +111,7 @@ sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimize
 ```bash
 sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh \
   --apply \
+  --preset proxy-heavy \
   --region us \
   --profile throughput \
   --tuning-mode performance \
@@ -120,6 +123,7 @@ sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimize
 ```
 
 - `--region`: `china | asia | us | eu | global`
+- `--preset`: `custom | proxy-heavy`
 - `--profile`: `balanced | throughput | latency`
 - `--tuning-mode`: `safe | performance | extreme`
 - `--workload`: `generic | proxy | streaming | gaming | bulk`
@@ -130,6 +134,11 @@ sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimize
 - `--no-network-test`: 不做 ping 探测，直接使用地区默认 RTT
 - `--print-config`: 顺手打印将写入的 sysctl 配置
 - `--json`: 输出 JSON，方便接入别的自动化流程
+
+### 场景预设说明
+
+- `custom`: 手动组合所有参数，适合大多数情况。
+- `proxy-heavy`: 面向高并发代理/中转/落地机，默认会偏向 `throughput + performance + proxy + fq`，同时抬高并发、连接跟踪、端口和队列预算，并默认打开深度诊断。
 
 ### 调优模式说明
 

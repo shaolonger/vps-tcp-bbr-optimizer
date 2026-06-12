@@ -73,7 +73,7 @@ case "$RAW_NAME" in
     ;;
 esac
 
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 STATE_DIR="${VPS_TCP_BBR_OPTIMIZER_VERIFY_STATE_DIR:-/var/lib/vps-tcp-bbr-optimizer/verify}"
 BASELINE_FILE="${STATE_DIR}/baseline.snapshot"
 CURRENT_FILE="${STATE_DIR}/current.snapshot"
@@ -236,7 +236,7 @@ write_record() {
   local section="$2"
   local key="$3"
   local value="$4"
-  printf '%s\t%s\t%s\n' "$section" "$key" "$value" >>"$file"
+  printf '%s\t%s\t%s\n' "$section" "$key" "$(normalize_value "$value")" >>"$file"
 }
 
 read_record() {
@@ -250,6 +250,10 @@ read_record() {
       exit
     }
   ' "$file"
+}
+
+normalize_value() {
+  printf '%s' "${1:-}" | tr '\t\r\n' '   ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
 }
 
 get_default_iface() {
@@ -347,7 +351,7 @@ capture_snapshot() {
   write_record "$out_file" "meta" "root_qdisc_full" "${root_qdisc_full:-unknown}"
 
   for key in "${SYSCTL_KEYS[@]}"; do
-    value="$(sysctl -n "$key" 2>/dev/null || printf '__missing__')"
+    value="$(normalize_value "$(sysctl -n "$key" 2>/dev/null || printf '__missing__')")"
     write_record "$out_file" "sysctl" "$key" "$value"
   done
 
@@ -366,6 +370,7 @@ config_value() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", left)
       if (left == want_key) {
         right=$2
+        gsub(/[[:space:]][[:space:]]+/, " ", right)
         sub(/^[[:space:]]+/, "", right)
         sub(/[[:space:]]+$/, "", right)
         print right
