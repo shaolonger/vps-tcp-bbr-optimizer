@@ -113,6 +113,47 @@ sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimize
 - 因此适合 `curl | sh`、`wget | sh` 这类一次性运行方式
 - 需要传参时，使用 `sh -s -- ...` 的形式
 
+## 一键对比报告
+
+安装前先运行一次，保存基线：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/verify.sh | sudo sh
+```
+
+执行优化脚本后，再运行同一条命令：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/verify.sh | sudo sh
+```
+
+第二次运行会自动读取第一次保存的基线，并在控制台输出前后对比报告。
+
+如果只想查看当前状态和已安装配置是否一致：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/verify.sh | sudo sh -s -- --current-only
+```
+
+如果想重置基线，重新开始一轮对比：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaolonger/vps-tcp-bbr-optimizer/main/verify.sh | sudo sh -s -- --reset
+```
+
+### 对比报告会看什么
+
+- 优化前后的关键 sysctl 项变化
+- 当前值与 `/etc/sysctl.d/99-vps-tcp-bbr-optimizer.conf` 的一致性
+- Root qdisc 变化
+- 可选的 ping 平均延迟变化
+
+### 注意
+
+- `verify.sh` 不会修改 TCP/BBR 配置，只会读取当前系统状态并生成报告
+- 如果 root qdisc 显示为 `mq`，不一定代表没生效；多队列网卡上这是常见现象
+- 基线和当前快照默认保存在 `/var/lib/vps-tcp-bbr-optimizer/verify/`
+
 ## 当前会调整的重点项
 
 - `net.core.default_qdisc = fq`
