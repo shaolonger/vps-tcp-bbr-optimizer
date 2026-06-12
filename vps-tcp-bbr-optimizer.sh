@@ -1,4 +1,65 @@
-#!/usr/bin/env bash
+#!/bin/sh
+
+if [ "${VPS_TCP_BBR_OPTIMIZER_BASH_STAGE:-0}" != "1" ]; then
+  if command -v bash >/dev/null 2>&1; then
+    VPS_TCP_BBR_OPTIMIZER_BASH_STAGE=1 exec bash "$0" "$@"
+  fi
+
+  detect_pm() {
+    if command -v apk >/dev/null 2>&1; then
+      printf '%s' apk
+    elif command -v apt-get >/dev/null 2>&1; then
+      printf '%s' apt
+    elif command -v dnf >/dev/null 2>&1; then
+      printf '%s' dnf
+    elif command -v yum >/dev/null 2>&1; then
+      printf '%s' yum
+    else
+      printf '%s' unknown
+    fi
+  }
+
+  install_bash() {
+    case "$(detect_pm)" in
+      apk)
+        apk add --no-cache bash
+        ;;
+      apt)
+        apt-get update && apt-get install -y bash
+        ;;
+      dnf)
+        dnf install -y bash
+        ;;
+      yum)
+        yum install -y bash
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  echo "检测到系统未安装 bash，正在尝试自举安装..." >&2
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "当前不是 root，无法自动安装 bash。" >&2
+    echo "请先安装 bash 后重试；例如 Alpine 可执行: apk add bash" >&2
+    exit 1
+  fi
+
+  if ! install_bash; then
+    echo "自动安装 bash 失败，请手动安装后重试。" >&2
+    exit 1
+  fi
+
+  if command -v bash >/dev/null 2>&1; then
+    VPS_TCP_BBR_OPTIMIZER_BASH_STAGE=1 exec bash "$0" "$@"
+  fi
+
+  echo "bash 安装后仍不可用，请检查系统环境。" >&2
+  exit 1
+fi
+
+unset VPS_TCP_BBR_OPTIMIZER_BASH_STAGE
 
 set -euo pipefail
 
@@ -57,6 +118,8 @@ RECOMMENDED_SYN_BACKLOG=0
 RECOMMENDED_CONNTRACK_MAX=0
 RECOMMENDED_FILE_MAX=0
 LIVE_QDISC_SAFE=0
+PKG_MANAGER="unknown"
+PKG_INSTALL_UPDATED=0
 
 declare -a WARNINGS=()
 declare -a NOTES=()
@@ -80,10 +143,10 @@ $SCRIPT_NAME v$SCRIPT_VERSION
   一键检测 VPS 的系统/网络能力，并为 TCP + BBR 生成或应用更稳妥的优化配置。
 
 用法:
-  sudo bash $SCRIPT_NAME
-  sudo bash $SCRIPT_NAME --apply --yes
-  sudo bash $SCRIPT_NAME --rollback
-  bash $SCRIPT_NAME --report --json
+  sudo sh $SCRIPT_NAME
+  sudo sh $SCRIPT_NAME --apply --yes
+  sudo sh $SCRIPT_NAME --rollback
+  sh $SCRIPT_NAME --report --json
 
 选项:
   --report               只检测并输出报告，不修改系统。
@@ -138,6 +201,20 @@ json_escape() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+detect_package_manager() {
+  if command_exists apk; then
+    PKG_MANAGER="apk"
+  elif command_exists apt-get; then
+    PKG_MANAGER="apt"
+  elif command_exists dnf; then
+    PKG_MANAGER="dnf"
+  elif command_exists yum; then
+    PKG_MANAGER="yum"
+  else
+    PKG_MANAGER="unknown"
+  fi
 }
 
 can_prompt() {
@@ -301,6 +378,7 @@ parse_args() {
 }
 
 load_os_info() {
+  detect_package_manager
   ARCH_NAME="$(uname -m 2>/dev/null || printf 'unknown')"
   KERNEL_RELEASE="$(uname -r 2>/dev/null || printf 'unknown')"
 
@@ -335,6 +413,145 @@ load_hardware_info() {
   [ -n "$CPU_MODEL" ] || CPU_MODEL="unknown"
 }
 
+package_for_capability() {
+  local capability="$1"
+  case "$PKG_MANAGER:$capability" in
+    apk:ip)
+      printf '%s' "iproute2-minimal"
+      ;;
+    apk:ping)
+      printf '%s' "iputils-ping"
+      ;;
+    apk:tc)
+      printf '%s' "iproute2-tc"
+      ;;
+    apk:ethtool)
+      printf '%s' "ethtool"
+      ;;
+    apk:sysctl)
+      printf '%s' "procps-ng"
+      ;;
+    apk:modprobe)
+      printf '%s' "kmod"
+      ;;
+    apt:ip)
+      printf '%s' "iproute2"
+      ;;
+    apt:ping)
+      printf '%s' "iputils-ping"
+      ;;
+    apt:tc)
+      printf '%s' "iproute2"
+      ;;
+    apt:ethtool)
+      printf '%s' "ethtool"
+      ;;
+    apt:sysctl)
+      printf '%s' "procps"
+      ;;
+    apt:modprobe)
+      printf '%s' "kmod"
+      ;;
+    dnf:ip|yum:ip)
+      printf '%s' "iproute"
+      ;;
+    dnf:ping|yum:ping)
+      printf '%s' "iputils"
+      ;;
+    dnf:tc|yum:tc)
+      printf '%s' "iproute-tc"
+      ;;
+    dnf:ethtool|yum:ethtool)
+      printf '%s' "ethtool"
+      ;;
+    dnf:sysctl|yum:sysctl)
+      printf '%s' "procps-ng"
+      ;;
+    dnf:modprobe|yum:modprobe)
+      printf '%s' "kmod"
+      ;;
+    *)
+      printf '%s' ""
+      ;;
+  esac
+}
+
+install_packages() {
+  local packages=("$@")
+
+  [ "${#packages[@]}" -gt 0 ] || return 0
+  require_root
+
+  case "$PKG_MANAGER" in
+    apk)
+      apk add --no-cache "${packages[@]}"
+      ;;
+    apt)
+      if [ "$PKG_INSTALL_UPDATED" -eq 0 ]; then
+        apt-get update
+        PKG_INSTALL_UPDATED=1
+      fi
+      DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+      ;;
+    dnf)
+      dnf install -y "${packages[@]}"
+      ;;
+    yum)
+      yum install -y "${packages[@]}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ensure_capability() {
+  local capability="$1"
+  local binary="$2"
+  local required="$3"
+  local package_name=""
+
+  if command_exists "$binary"; then
+    return 0
+  fi
+
+  package_name="$(package_for_capability "$capability")"
+  if [ -z "$package_name" ]; then
+    if [ "$required" = "required" ]; then
+      die "缺少关键命令 $binary，且无法识别当前系统的安装包。"
+    fi
+    warn "缺少可选命令 $binary，相关功能将被跳过。"
+    return 1
+  fi
+
+  if [ "$required" != "required" ]; then
+    warn "缺少可选命令 $binary，相关功能将被跳过。可安装包: $package_name"
+    return 1
+  fi
+
+  if [ "$(id -u)" -eq 0 ]; then
+    info "检测到缺少 $binary，正在尝试安装 $package_name ..."
+    if install_packages "$package_name"; then
+      if command_exists "$binary"; then
+        ok "已安装 $binary"
+        return 0
+      fi
+      die "安装 $package_name 后仍未找到 $binary。"
+    fi
+  fi
+
+  die "缺少关键命令 $binary。请先安装 $package_name 后重试。"
+}
+
+ensure_runtime_dependencies() {
+  ensure_capability "sysctl" "sysctl" "required"
+  ensure_capability "ip" "ip" "required"
+  ensure_capability "ping" "ping" "optional" || true
+  ensure_capability "tc" "tc" "optional" || true
+  ensure_capability "ethtool" "ethtool" "optional" || true
+  ensure_capability "modprobe" "modprobe" "optional" || true
+}
+
 get_default_iface() {
   ip route show default 2>/dev/null | awk '
     $1 == "default" {
@@ -349,6 +566,11 @@ get_default_iface() {
 }
 
 load_network_info() {
+  if ! command_exists ip; then
+    warn "未检测到 ip 命令，默认网卡与路由信息无法探测。"
+    return
+  fi
+
   DEFAULT_IFACE="$(get_default_iface)"
   if [ -z "$DEFAULT_IFACE" ]; then
     warn "未检测到默认网卡，qdisc 和 MTU 探测会被跳过。"
@@ -390,8 +612,10 @@ load_network_info() {
     [ -n "$CURRENT_QDISC" ] || CURRENT_QDISC="unknown"
   fi
 
-  CURRENT_CC="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'unknown')"
-  AVAILABLE_CC="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || printf '')"
+  if command_exists sysctl; then
+    CURRENT_CC="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || printf 'unknown')"
+    AVAILABLE_CC="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || printf '')"
+  fi
 
   if printf '%s\n' "$AVAILABLE_CC" | grep -qw bbr; then
     BBR_AVAILABLE=1
@@ -460,7 +684,13 @@ probe_rtt() {
 
   while IFS= read -r target; do
     [ -n "$target" ] || continue
-    avg="$(ping -c 3 -W 1 "$target" 2>/dev/null | awk -F'/' '/rtt|round-trip/ {print int($5 + 0.5); exit}')"
+    avg="$(
+      {
+        ping -c 3 -W 1 "$target" 2>/dev/null ||
+        ping -c 3 "$target" 2>/dev/null ||
+        true
+      } | awk -F'/' '/rtt|round-trip/ {print int($5 + 0.5); exit}'
+    )"
     if [ -n "$avg" ]; then
       avgs+=("$avg")
       PING_RESULTS+=("$target=${avg}ms")
@@ -719,6 +949,77 @@ apply_runtime_sysctls() {
   done
 }
 
+reload_sysctl_file() {
+  local file_path="$1"
+
+  if ! command_exists sysctl; then
+    warn "未检测到 sysctl，无法重新加载配置文件。"
+    return 1
+  fi
+
+  if [ ! -f "$file_path" ]; then
+    warn "配置文件不存在，无法重新加载: $file_path"
+    return 1
+  fi
+
+  if sysctl -e -p "$file_path" >/dev/null 2>&1; then
+    ok "已重新加载 $file_path"
+    return 0
+  fi
+
+  warn "重新加载 $file_path 失败，配置文件已写入，但部分值可能需要重启后生效。"
+  return 1
+}
+
+reload_sysctl_system_portable() {
+  local file=""
+  local matched=0
+  local -a files=()
+  local -a dirs=(
+    /etc/sysctl.conf
+    /usr/lib/sysctl.d
+    /usr/local/lib/sysctl.d
+    /lib/sysctl.d
+    /run/sysctl.d
+    /etc/sysctl.d
+  )
+
+  if ! command_exists sysctl; then
+    warn "未检测到 sysctl，无法重新加载系统配置。"
+    return 1
+  fi
+
+  if sysctl --help 2>&1 | grep -q -- '--system'; then
+    if sysctl --system >/dev/null 2>&1; then
+      ok "已重新加载系统 sysctl 配置"
+      return 0
+    fi
+    warn "sysctl --system 执行失败，正在尝试逐文件加载。"
+  fi
+
+  if [ -f /etc/sysctl.conf ]; then
+    files+=("/etc/sysctl.conf")
+  fi
+
+  for file in /usr/lib/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf /lib/sysctl.d/*.conf /run/sysctl.d/*.conf /etc/sysctl.d/*.conf; do
+    [ -e "$file" ] || continue
+    files+=("$file")
+  done
+
+  for file in "${files[@]}"; do
+    matched=1
+    sysctl -e -p "$file" >/dev/null 2>&1 || true
+  done
+
+  if [ "$matched" -eq 1 ]; then
+    ok "已按可移植方式重新加载系统 sysctl 配置"
+    return 0
+  fi
+
+  warn "未找到可加载的 sysctl 配置文件。"
+  return 1
+}
+
 write_config_file() {
   ensure_dirs
   mkdir -p "$(dirname "$CONF_PATH")"
@@ -769,8 +1070,7 @@ rollback_config() {
     if [ -f "$CONF_PATH" ]; then
       rm -f "$CONF_PATH"
       ok "已删除 $CONF_PATH"
-      sysctl --system >/dev/null 2>&1 || true
-      ok "已重新加载系统 sysctl 配置"
+      reload_sysctl_system_portable || true
       return
     fi
     die "没有找到可回滚的备份。"
@@ -778,8 +1078,7 @@ rollback_config() {
 
   cp "$latest_backup" "$CONF_PATH"
   ok "已恢复备份: $latest_backup -> $CONF_PATH"
-  sysctl --system >/dev/null 2>&1 || true
-  ok "已重新加载系统 sysctl 配置"
+  reload_sysctl_file "$CONF_PATH" || true
 }
 
 print_report() {
@@ -929,11 +1228,14 @@ main() {
   require_linux
 
   if [ "$ACTION" = "rollback" ]; then
+    detect_package_manager
+    ensure_capability "sysctl" "sysctl" "required"
     rollback_config
     exit 0
   fi
 
   load_os_info
+  ensure_runtime_dependencies
   load_hardware_info
   load_network_info
   compute_recommendation
@@ -976,7 +1278,7 @@ main() {
           warn "以下键即时应用失败，但配置文件已写入：${APPLY_FAILURES[*]}"
         fi
       else
-        note "未修改系统。你可以稍后运行: sudo bash $SCRIPT_NAME --apply --print-config"
+        note "未修改系统。你可以稍后运行: sudo sh $SCRIPT_NAME --apply --print-config"
       fi
       ;;
   esac

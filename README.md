@@ -2,6 +2,15 @@
 
 一个偏保守的一键 VPS TCP/BBR 优化脚本，目标不是“堆最多参数”，而是先检测机器能力，再按带宽、RTT、内存和当前内核能力生成更稳妥的 sysctl 配置。
 
+当前实现面向这些 Linux 发行版做了兼容处理：
+
+- Alpine
+- Debian
+- Ubuntu
+- CentOS
+- RHEL
+- Fedora
+
 它参考了这些项目的使用方式和思路，但实现上更偏向“默认安全、显式 apply、支持回滚”：
 
 - [Omnitt TCP 调参](https://omnitt.com/)
@@ -11,12 +20,15 @@
 
 ## 特点
 
+- 入口脚本改为 `/bin/sh` 启动，自带 Bash bootstrap；像 Alpine 这类默认没有 Bash 的系统，脚本会在 root 环境下自动尝试安装 Bash 后继续执行。
 - 自动检测发行版、内核、虚拟化、CPU、内存、Swap、默认网卡、MTU、当前 qdisc、当前拥塞控制算法。
+- 会对关键依赖做跨发行版检查；缺少 `ip` / `sysctl` 这类硬依赖时，会按发行版自动尝试安装。
 - 可选做轻量 RTT 探测，并结合带宽与内存估算更合适的缓冲区。
 - 默认优先启用 `fq + bbr`；如果当前内核没有 `bbr`，会自动回退到当前算法或 `cubic`。
 - 默认只改相对安全且有明确官方文档依据的项，比如 `tcp_mtu_probing=1`、`tcp_slow_start_after_idle=0`、`tcp_fastopen=3`、`tcp_sack=1`、`rp_filter=2`。
 - 不默认做高风险动作，比如强装第三方内核、全局 `tcp_tw_reuse=1`、关闭 `ip_forward`、大幅改 VM 策略。
 - 写入前自动备份，支持 `--rollback`。
+- 回滚和配置重载不再依赖 `sysctl --system`，因此 Alpine/BusyBox 环境也能走可移植的逐文件加载路径。
 
 ## 快速开始
 
@@ -29,31 +41,31 @@ chmod +x /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimiz
 仅检测并输出建议：
 
 ```bash
-bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --report --print-config
+sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --report --print-config
 ```
 
 交互式一键检测，最后询问是否应用：
 
 ```bash
-sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh
+sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh
 ```
 
 非交互直接应用：
 
 ```bash
-sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --apply --yes
+sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --apply --yes
 ```
 
 回滚最近一次备份：
 
 ```bash
-sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --rollback
+sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh --rollback
 ```
 
 ## 常用参数
 
 ```bash
-sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh \
+sudo sh /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimizer.sh \
   --apply \
   --region us \
   --profile throughput \
@@ -99,7 +111,8 @@ sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimi
 
 - 持久化配置默认写到 `/etc/sysctl.d/99-vps-tcp-bbr-optimizer.conf`
 - 备份默认存到 `/var/lib/vps-tcp-bbr-optimizer/backups/`
-- `--rollback` 会恢复最近一份备份，并重新加载系统 sysctl
+- `--rollback` 会恢复最近一份备份，并重新加载配置
+- 在不支持 `sysctl --system` 的环境里，会自动回退到逐文件 `sysctl -p` 的可移植加载方式
 
 ## 建议的使用顺序
 
@@ -107,6 +120,13 @@ sudo bash /Users/shaolong/Code/personal/vps-tcp-bbr-optimizer/vps-tcp-bbr-optimi
 2. 确认当前业务不是强依赖特殊路由或特殊内核参数。
 3. 再用 `--apply` 落盘和生效。
 4. 用 `sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc` 和 `tc qdisc show dev <网卡>` 做复核。
+
+## 兼容说明
+
+- Alpine 默认没有 Bash，脚本会先用 `/bin/sh` 启动，再自动补齐 Bash。
+- Alpine 最小环境若缺少 `ip`，脚本会尝试安装 `iproute2-minimal`。
+- `ping`、`tc`、`ethtool` 被视为可选依赖；缺失时脚本会降级运行，而不是直接退出。
+- RTT 探测对 BusyBox `ping` 做了兼容处理；如果仍然探测失败，会退回地区默认 RTT。
 
 ## 参考依据
 
